@@ -379,14 +379,7 @@
         const pdfUrl = 'interstice-issue-1.pdf';
         const pdfWorkerUrl = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         // Fallback only: used if the PDF can't be opened (e.g. page opened straight from disk)
-        const imageFolder = 'interstice-issue-1-pages/';
-        const imageExtension = '.jpg';
-
-        let totalPages = 97;           // replaced by the real PDF page count
-        let pageAspectRatio = 0.7;     // replaced by the real PDF page shape
-        let pdfDoc = null;
-        const preloadAhead = 5;        // pages fetched ahead of the reader
-        const preloadBehind = 2;
+        
 
         const viewer = document.getElementById('viewer');
         const pageIndicator = document.getElementById('pageIndicator');
