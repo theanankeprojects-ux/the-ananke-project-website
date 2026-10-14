@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=Playfair+Display:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
     
-    <link rel="preload" as="image" href="interstice-issue-1-pages/1.png" fetchpriority="high">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 
     <style>
         :root {
@@ -369,14 +369,22 @@
 
     </script>
 
+    <!-- PDF.js (Mozilla) — reads the real PDF in the browser -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
     <script>
         // ==========================================
         // CONFIGURATION
         // ==========================================
-        const totalPages = 97;
+        const pdfUrl = 'interstice-issue-1.pdf';
+        const pdfWorkerUrl = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        // Fallback only: used if the PDF can't be opened (e.g. page opened straight from disk)
         const imageFolder = 'interstice-issue-1-pages/';
-        const imageExtension = '.png';
-        const pageAspectRatio = 0.7;   // width / height of one page
+        const imageExtension = '.jpg';
+
+        let totalPages = 97;           // replaced by the real PDF page count
+        let pageAspectRatio = 0.7;     // replaced by the real PDF page shape
+        let pdfDoc = null;
         const preloadAhead = 5;        // pages fetched ahead of the reader
         const preloadBehind = 2;
 
@@ -410,6 +418,32 @@
         // ==========================================
         // LAZY IMAGE LOADING (with per-page shimmer)
         // ==========================================
+        // Draw one PDF page and hand it to the <img> as a blob URL
+        // (an <img> survives the flip library's page cloning; a <canvas> would not).
+        async function renderPdfPage(idx) {
+            const pdfPage = await pdfDoc.getPage(idx + 1);
+            const rect = pageFlip && pageFlip.getBoundsRect();
+            let cssWidth = rect && rect.pageWidth ? rect.pageWidth
+                         : Math.min(viewer.clientWidth / (isMobile ? 1 : 2), 800);
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const targetWidth = Math.min(Math.max(cssWidth * dpr, 600), 1800);
+            const base = pdfPage.getViewport({ scale: 1 });
+            const viewport = pdfPage.getViewport({ scale: targetWidth / base.width });
+
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.floor(viewport.width);
+            canvas.height = Math.floor(viewport.height);
+            const ctx = canvas.getContext('2d', { alpha: false });
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+            pdfPage.cleanup();
+
+            const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92));
+            canvas.width = canvas.height = 0;
+            return URL.createObjectURL(blob);
+        }
+
         function loadPage(idx) {
             if (idx < 0 || idx >= totalPages) return;
             const page = pageEls[idx];
@@ -423,7 +457,32 @@
             };
             img.onload = done;
             img.onerror = done;
-            img.src = `${imageFolder}${idx + 1}${imageExtension}`;
+
+            if (!pdfDoc) {
+                img.src = `${imageFolder}${idx + 1}${imageExtension}`;
+                return;
+            }
+            renderPdfPage(idx).then(url => {
+                page._blobUrl = url;
+                img.src = url;
+            }).catch(err => {
+                console.warn('Could not render page', idx + 1, err);
+                done();
+            });
+        }
+
+        // Free memory for pages the reader has moved far away from
+        function releaseFarPages(idx) {
+            if (!pdfDoc) return;
+            pageEls.forEach((page, i) => {
+                if (Math.abs(i - idx) > preloadAhead + 5 && page.dataset.state === 'done' && page._blobUrl) {
+                    page.querySelector('img').removeAttribute('src');
+                    URL.revokeObjectURL(page._blobUrl);
+                    page._blobUrl = null;
+                    page.classList.remove('loaded');
+                    delete page.dataset.state;
+                }
+            });
         }
 
         function loadAround(idx) {
@@ -432,6 +491,7 @@
             for (let i = 2; i <= preloadAhead; i++) order.push(idx + i);
             for (let i = 2; i <= preloadBehind; i++) order.push(idx - i);
             order.forEach(loadPage);
+            releaseFarPages(idx);
         }
 
         function showLoader(text) {
@@ -563,10 +623,31 @@
         // ==========================================
         // START
         // ==========================================
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => build(0));
-        } else {
+        async function start() {
+            try {
+                if (typeof pdfjsLib === 'undefined') throw new Error('PDF.js did not load');
+                pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+                // Range requests + no background download: only the pages needed are fetched
+                pdfDoc = await pdfjsLib.getDocument({
+                    url: pdfUrl,
+                    disableAutoFetch: true,
+                    disableStream: false
+                }).promise;
+                totalPages = pdfDoc.numPages;
+                const first = await pdfDoc.getPage(1);
+                const vp = first.getViewport({ scale: 1 });
+                pageAspectRatio = vp.width / vp.height;
+            } catch (err) {
+                console.warn('Opening the PDF failed, falling back to page images:', err);
+                pdfDoc = null;
+            }
             build(0);
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', start);
+        } else {
+            start();
         }
     </script>
 
